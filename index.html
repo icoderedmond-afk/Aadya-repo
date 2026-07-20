@@ -1,0 +1,560 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Goku Subway Runner</title>
+    <style>
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+        body {
+            background-color: #1a1a2e;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            color: #fff;
+            overflow: hidden;
+        }
+        #game-container {
+            position: relative;
+            width: 400px;
+            height: 600px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.8);
+            border-radius: 12px;
+            overflow: hidden;
+            background: #0f0c20;
+        }
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+        .ui-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 20px;
+        }
+        .stats {
+            display: flex;
+            justify-content: space-between;
+            font-size: 20px;
+            font-weight: bold;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.8);
+        }
+        .score-val { color: #00ffcc; }
+        .coins-val { color: #ffd700; }
+        #game-over-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.85);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 15px;
+            z-index: 10;
+        }
+        #game-over-screen h1 {
+            font-size: 36px;
+            color: #ff4757;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        .btn {
+            padding: 12px 30px;
+            font-size: 18px;
+            font-weight: bold;
+            color: #fff;
+            background: linear-gradient(45deg, #ff6b6b, #ff8e53);
+            border: none;
+            border-radius: 25px;
+            cursor: pointer;
+            box-shadow: 0 4px 15px rgba(255, 107, 107, 0.4);
+            transition: transform 0.1s ease;
+            pointer-events: auto;
+        }
+        .btn:hover {
+            transform: scale(1.05);
+        }
+        .controls-hint {
+            position: absolute;
+            bottom: 10px;
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.6);
+            text-align: center;
+            width: 100%;
+        }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <canvas id="gameCanvas" width="400" height="600"></canvas>
+    
+    <div class="ui-overlay">
+        <div class="stats">
+            <div>SCORE: <span id="score" class="score-val">0</span></div>
+            <div>COINS: <span id="coins" class="coins-val">0</span></div>
+        </div>
+        <div class="controls-hint">Use ← → to Switch Lanes | ↑ to Jump | ↓ to Slide</div>
+    </div>
+
+    <div id="game-over-screen">
+        <h1>Game Over</h1>
+        <p>Final Score: <span id="final-score">0</span></p>
+        <p>Coins Collected: <span id="final-coins">0</span></p>
+        <button class="btn" onclick="resetGame()">PLAY AGAIN</button>
+    </div>
+</div>
+
+<script>
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+
+const scoreEl = document.getElementById('score');
+const coinsEl = document.getElementById('coins');
+const gameOverScreen = document.getElementById('game-over-screen');
+const finalScoreEl = document.getElementById('final-score');
+const finalCoinsEl = document.getElementById('final-coins');
+
+// Game Parameters
+const LANES = [100, 200, 300]; // X positions for 3 lanes
+let currentLane = 1; // 0: Left, 1: Center, 2: Right
+let targetX = LANES[currentLane];
+
+let gameActive = false;
+let score = 0;
+let coinsCollected = 0;
+let gameSpeed = 6;
+let frameCount = 0;
+
+// Player (Goku) State
+const goku = {
+    x: LANES[1],
+    y: 480,
+    baseY: 480,
+    width: 40,
+    height: 70,
+    velocityY: 0,
+    gravity: 0.8,
+    isJumping: false,
+    isSliding: false,
+    slideTimer: 0,
+    auraPhase: 0
+};
+
+// Obstacles & Collectibles arrays
+let obstacles = [];
+let coins = [];
+
+// Input Handlers
+document.addEventListener('keydown', (e) => {
+    if (!gameActive) return;
+
+    if ((e.key === 'ArrowLeft' || e.key === 'a' || e.key === 'A') && currentLane > 0) {
+        currentLane--;
+    } else if ((e.key === 'ArrowRight' || e.key === 'd' || e.key === 'D') && currentLane < 2) {
+        currentLane++;
+    } else if ((e.key === 'ArrowUp' || e.key === 'w' || e.key === 'W' || e.key === ' ') && !goku.isJumping) {
+        goku.velocityY = -14;
+        goku.isJumping = true;
+    } else if ((e.key === 'ArrowDown' || e.key === 's' || e.key === 'S') && !goku.isSliding) {
+        goku.isSliding = true;
+        goku.slideTimer = 25;
+        if (goku.isJumping) goku.velocityY = 10; // Fast drop
+    }
+});
+
+function startGame() {
+    obstacles = [];
+    coins = [];
+    score = 0;
+    coinsCollected = 0;
+    gameSpeed = 6;
+    currentLane = 1;
+    goku.x = LANES[1];
+    goku.y = goku.baseY;
+    goku.isJumping = false;
+    goku.isSliding = false;
+    goku.velocityY = 0;
+    
+    gameOverScreen.style.display = 'none';
+    gameActive = true;
+    requestAnimationFrame(update);
+}
+
+function resetGame() {
+    startGame();
+}
+
+function spawnObjects() {
+    frameCount++;
+    if (frameCount % Math.max(30, Math.floor(70 - gameSpeed * 2)) === 0) {
+        const lane = Math.floor(Math.random() * 3);
+        const typeRand = Math.random();
+
+        if (typeRand < 0.6) {
+            // Subway Train / High Barrier
+            obstacles.push({
+                lane: lane,
+                y: -150,
+                width: 70,
+                height: 120,
+                type: 'train'
+            });
+        } else {
+            // Low Barrier (Can be jumped over)
+            obstacles.push({
+                lane: lane,
+                y: -50,
+                width: 60,
+                height: 35,
+                type: 'barrier'
+            });
+        }
+    }
+
+    // Spawn Dragon Ball Coins
+    if (frameCount % 20 === 0) {
+        const lane = Math.floor(Math.random() * 3);
+        coins.push({
+            lane: lane,
+            y: -30,
+            radius: 12,
+            collected: false
+        });
+    }
+}
+
+function update() {
+    if (!gameActive) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // Speed scaling
+    gameSpeed += 0.001;
+    score += Math.floor(gameSpeed / 2);
+    scoreEl.innerText = score;
+    coinsEl.innerText = coinsCollected;
+
+    // Draw Perspective Subway Track Background
+    drawTracks();
+
+    // Smooth movement between lanes
+    targetX = LANES[currentLane];
+    goku.x += (targetX - goku.x) * 0.25;
+
+    // Jump / Physics update
+    if (goku.isJumping) {
+        goku.y += goku.velocityY;
+        goku.velocityY += goku.gravity;
+
+        if (goku.y >= goku.baseY) {
+            goku.y = goku.baseY;
+            goku.isJumping = false;
+            goku.velocityY = 0;
+        }
+    }
+
+    // Slide update
+    if (goku.isSliding) {
+        goku.slideTimer--;
+        if (goku.slideTimer <= 0) {
+            goku.isSliding = false;
+        }
+    }
+
+    // Update & Draw Obstacles
+    for (let i = obstacles.length - 1; i >= 0; i--) {
+        let obs = obstacles[i];
+        obs.y += gameSpeed;
+
+        drawObstacle(obs);
+
+        // Collision Check
+        if (checkObstacleCollision(goku, obs)) {
+            endGame();
+            return;
+        }
+
+        if (obs.y > canvas.height + 150) obstacles.splice(i, 1);
+    }
+
+    // Update & Draw Coins
+    for (let i = coins.length - 1; i >= 0; i--) {
+        let coin = coins[i];
+        coin.y += gameSpeed;
+
+        if (!coin.collected) {
+            drawCoin(coin);
+
+            // Coin Collision
+            let coinX = LANES[coin.lane];
+            let currentGokuHeight = goku.isSliding ? goku.height / 2 : goku.height;
+            let currentGokuY = goku.isSliding ? goku.y + goku.height / 2 : goku.y;
+
+            let dist = Math.hypot(goku.x - coinX, currentGokuY - coin.y);
+            if (dist < coin.radius + 20) {
+                coin.collected = true;
+                coinsCollected++;
+            }
+        }
+
+        if (coin.y > canvas.height + 50) coins.splice(i, 1);
+    }
+
+    // Draw Goku Player
+    drawGoku(goku.x, goku.y, goku.isSliding, goku.isJumping);
+
+    spawnObjects();
+    requestAnimationFrame(update);
+}
+
+function drawTracks() {
+    // Background Ground
+    ctx.fillStyle = '#110e20';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    // Track Perspective Lines
+    const horizonY = 0;
+    ctx.strokeStyle = '#3d3766';
+    ctx.lineWidth = 3;
+
+    // Outer and Inner Lane Dividers
+    const dividers = [50, 150, 250, 350];
+    dividers.forEach(x => {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, canvas.height);
+        ctx.stroke();
+    });
+
+    // Moving track ties (sleepers)
+    ctx.strokeStyle = '#252044';
+    ctx.lineWidth = 4;
+    let offset = (frameCount * gameSpeed) % 40;
+    for (let y = offset; y < canvas.height; y += 40) {
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(canvas.width, y);
+        ctx.stroke();
+    }
+}
+
+function drawGoku(x, y, isSliding, isJumping) {
+    ctx.save();
+    ctx.translate(x, y);
+
+    goku.auraPhase += 0.15;
+    let auraGlow = Math.sin(goku.auraPhase) * 5 + 15;
+
+    // Super Saiyan Aura Effect
+    let auraGradient = ctx.createRadialGradient(0, -20, 5, 0, -20, auraGlow + 30);
+    auraGradient.addColorStop(0, 'rgba(255, 230, 0, 0.8)');
+    auraGradient.addColorStop(0.5, 'rgba(255, 140, 0, 0.4)');
+    auraGradient.addColorStop(1, 'rgba(255, 255, 0, 0)');
+    
+    ctx.fillStyle = auraGradient;
+    ctx.beginPath();
+    ctx.arc(0, -20, auraGlow + 30, 0, Math.PI * 2);
+    ctx.fill();
+
+    if (isSliding) {
+        // Sliding posture
+        // Gi Top (Orange)
+        ctx.fillStyle = '#ff5500';
+        ctx.fillRect(-15, -20, 30, 20);
+
+        // Blue Belt
+        ctx.fillStyle = '#0055ff';
+        ctx.fillRect(-15, -5, 30, 6);
+
+        // Goku Spiky Hair (Yellow/Gold - SSJ)
+        ctx.fillStyle = '#ffe600';
+        ctx.beginPath();
+        ctx.moveTo(-20, -20);
+        ctx.lineTo(-30, -10);
+        ctx.lineTo(-15, -30);
+        ctx.lineTo(0, -40);
+        ctx.lineTo(15, -30);
+        ctx.lineTo(30, -10);
+        ctx.lineTo(20, -20);
+        ctx.closePath();
+        ctx.fill();
+
+        // Face
+        ctx.fillStyle = '#ffdbac';
+        ctx.fillRect(-10, -25, 20, 10);
+    } else {
+        // Standing / Running / Jumping posture
+        let legOffset = isJumping ? 0 : Math.sin(frameCount * 0.3) * 10;
+
+        // Legs (Orange Pants)
+        ctx.fillStyle = '#ff5500';
+        ctx.fillRect(-14, -20, 10, 25 + legOffset);
+        ctx.fillRect(4, -20, 10, 25 - legOffset);
+
+        // Blue Boots
+        ctx.fillStyle = '#002288';
+        ctx.fillRect(-14, 5 + legOffset, 10, 8);
+        ctx.fillRect(4, 5 - legOffset, 10, 8);
+
+        // Torso - Orange Gi
+        ctx.fillStyle = '#ff5500';
+        ctx.fillRect(-16, -50, 32, 32);
+
+        // Blue Undershirt V-neck
+        ctx.fillStyle = '#0055ff';
+        ctx.beginPath();
+        ctx.moveTo(-10, -50);
+        ctx.lineTo(0, -35);
+        ctx.lineTo(10, -50);
+        ctx.closePath();
+        ctx.fill();
+
+        // Blue Belt & Wristbands
+        ctx.fillRect(-16, -20, 32, 5);
+        ctx.fillRect(-22, -42, 6, 8);
+        ctx.fillRect(16, -42, 6, 8);
+
+        // Face
+        ctx.fillStyle = '#ffdbac';
+        ctx.fillRect(-10, -62, 20, 14);
+
+        // Eyes (SSJ Teal)
+        ctx.fillStyle = '#00ffff';
+        ctx.fillRect(-6, -58, 4, 4);
+        ctx.fillRect(2, -58, 4, 4);
+
+        // Iconic Super Saiyan Spiky Hair
+        ctx.fillStyle = '#ffe600';
+        ctx.strokeStyle = '#e6b800';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(-12, -62);
+        ctx.lineTo(-25, -70);
+        ctx.lineTo(-15, -78);
+        ctx.lineTo(-22, -92);
+        ctx.lineTo(-8, -85);
+        ctx.lineTo(0, -100); // Main top spike
+        ctx.lineTo(8, -85);
+        ctx.lineTo(22, -92);
+        ctx.lineTo(15, -78);
+        ctx.lineTo(25, -70);
+        ctx.lineTo(12, -62);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+    }
+
+    ctx.restore();
+}
+
+function drawObstacle(obs) {
+    let x = LANES[obs.lane];
+    
+    if (obs.type === 'train') {
+        // Subway Train Car
+        ctx.fillStyle = '#e74c3c'; // Train Red
+        ctx.fillRect(x - obs.width / 2, obs.y, obs.width, obs.height);
+
+        // Front Windshield
+        ctx.fillStyle = '#34495e';
+        ctx.fillRect(x - obs.width / 2 + 5, obs.y + obs.height - 30, obs.width - 10, 20);
+
+        // Train Lights
+        ctx.fillStyle = '#f1c40f';
+        ctx.beginPath();
+        ctx.arc(x - 20, obs.y + obs.height - 5, 5, 0, Math.PI * 2);
+        ctx.arc(x + 20, obs.y + obs.height - 5, 5, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Roof metallic detail
+        ctx.fillStyle = '#c0392b';
+        ctx.fillRect(x - obs.width / 2 + 3, obs.y + 5, obs.width - 6, obs.height - 40);
+    } else {
+        // Low Barrier
+        ctx.fillStyle = '#f39c12';
+        ctx.fillRect(x - obs.width / 2, obs.y, obs.width, obs.height);
+
+        // Hazard Stripes
+        ctx.fillStyle = '#2c3e50';
+        for (let i = 0; i < obs.width; i += 15) {
+            ctx.fillRect(x - obs.width / 2 + i, obs.y, 7, obs.height);
+        }
+    }
+}
+
+function drawCoin(coin) {
+    let x = LANES[coin.lane];
+    
+    // Glowing Dragon Ball Coin
+    ctx.fillStyle = '#ff9900';
+    ctx.beginPath();
+    ctx.arc(x, coin.y, coin.radius, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = '#ffee00';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Dragon Ball Star in center
+    ctx.fillStyle = '#ff0000';
+    ctx.beginPath();
+    ctx.arc(x, coin.y, 3, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+function checkObstacleCollision(player, obs) {
+    let obsX = LANES[obs.lane];
+    let laneWidth = 50;
+
+    // Check if player is in the same lane
+    if (Math.abs(player.x - obsX) < laneWidth / 2) {
+        let playerTop = player.isSliding ? player.y + player.height / 2 : player.y - player.height;
+        let playerBottom = player.y;
+
+        let obsTop = obs.y;
+        let obsBottom = obs.y + obs.height;
+
+        // Check vertical overlap
+        if (playerBottom > obsTop && playerTop < obsBottom) {
+            // Jump over low barrier exception
+            if (obs.type === 'barrier' && player.isJumping && player.y < obs.y - 10) {
+                return false;
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
+function endGame() {
+    gameActive = false;
+    finalScoreEl.innerText = score;
+    finalCoinsEl.innerText = coinsCollected;
+    gameOverScreen.style.display = 'flex';
+}
+
+// Start game on load
+startGame();
+</script>
+
+</body>
+</html>
